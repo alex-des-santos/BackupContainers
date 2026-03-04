@@ -1,5 +1,5 @@
-# Backups gerados pela Action (descomente a linha abaixo se quiser histórico no Git)
-backups/
+# Backups gerados pela Action (histórico ativo no Git)
+# backups/
 
 # Chaves e ficheiros sensíveis
 *.pem
