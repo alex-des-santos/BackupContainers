@@ -1,0 +1,14 @@
+# Exemplo de configuração para o script de backup (VPS).
+# Copie para um ficheiro (ex.: config) e defina estes valores na VPS,
+# por exemplo em /etc/environment, no cron, ou com export antes de rodar o script.
+# Não commite ficheiros com valores reais (paths ou segredos).
+
+# Diretório onde estão os seus docker-compose.yml (um ou mais stacks).
+# Para descobrir: find / -name "docker-compose.yml" 2>/dev/null
+BACKUP_COMPOSE_ROOT=/srv/docker
+
+# Diretório onde o script cria o tarball (default: /tmp).
+# BACKUP_OUTPUT_DIR=/tmp
+
+# Se 1, não inclui ficheiros .env no tarball (recomendado por segurança).
+BACKUP_EXCLUDE_ENV=1

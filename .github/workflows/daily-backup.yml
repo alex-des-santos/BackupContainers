@@ -1,0 +1,65 @@
+# Backup diário de configurações Docker da VPS para este repositório.
+# Requer: script instalado na VPS em /usr/local/bin/backup-docker-configs.sh
+# e secrets VPS_HOST, VPS_USER, VPS_SSH_KEY (e opcionalmente VPS_SSH_PORT).
+name: daily-vps-config-backup
+
+on:
+  workflow_dispatch:
+  schedule:
+    # UTC. Ex.: 06:15 UTC = 03:15 BRT (Brasil). Ajuste conforme seu fuso.
+    - cron: "15 6 * * *"
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      # Checkout para poder fazer commit do tarball em backups/
+      - name: Checkout repositório
+        uses: actions/checkout@v4
+
+      # SSH e rsync necessários para conectar à VPS e baixar o arquivo
+      - name: Instalar ferramentas (SSH e rsync)
+        run: sudo apt-get update && sudo apt-get install -y openssh-client rsync
+
+      # Monta a chave privada a partir do secret para autenticação SSH
+      - name: Configurar chave SSH
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+      # Evita prompt de confirmação do host na primeira conexão
+      - name: Adicionar VPS ao known_hosts
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
+        run: |
+          PORT="${VPS_SSH_PORT:-22}"
+          ssh-keyscan -p "$PORT" -H "$VPS_HOST" >> ~/.ssh/known_hosts
+
+      # Roda o script na VPS (gera o tarball) e baixa o arquivo para backups/
+      - name: Executar backup na VPS e baixar tarball
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
+        run: |
+          PORT="${VPS_SSH_PORT:-22}"
+          DATE="$(date -u +%F)"
+          mkdir -p backups
+
+          REMOTE=$(ssh -o StrictHostKeyChecking=no -p "$PORT" "${VPS_USER}@${VPS_HOST}" "sudo /usr/local/bin/backup-docker-configs.sh" 2>/dev/null | tail -1)
+          if [[ -n "$REMOTE" && "$REMOTE" == *.tar.gz ]]; then
+            scp -o StrictHostKeyChecking=no -P "$PORT" "${VPS_USER}@${VPS_HOST}:${REMOTE}" "backups/${DATE}.tar.gz"
+          fi
+
+      # Persiste o backup no repositório (commit + push)
+      - name: Commit e push do backup
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add backups/
+          git diff --staged --quiet || git commit -m "backup: $(date -u +%F)"
+          git push

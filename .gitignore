@@ -1,0 +1,9 @@
+# Backups gerados pela Action (descomente a linha abaixo se quiser histórico no Git)
+backups/
+
+# Chaves e ficheiros sensíveis
+*.pem
+id_*
+
+# Config local (se copiar config.example para config)
+config
