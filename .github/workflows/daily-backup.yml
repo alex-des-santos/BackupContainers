@@ -38,6 +38,18 @@ jobs:
           VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
         run: |
           PORT="${VPS_SSH_PORT:-22}"
+          
+          # Validate port value
+          if ! [[ "$PORT" =~ ^[0-9]+$ ]]; then
+            echo "ERRO: VPS_SSH_PORT deve ser numérico. Valor recebido: '$PORT'"
+            exit 1
+          fi
+          
+          if [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
+            echo "ERRO: VPS_SSH_PORT deve estar no range 1-65535. Valor recebido: $PORT"
+            exit 1
+          fi
+          
           DATE="$(date -u +%F)"
           mkdir -p backups
 
@@ -49,9 +61,54 @@ jobs:
           echo "Tarball remoto: $REMOTE"
 
           if [[ -n "$REMOTE" && "$REMOTE" == *.tar.gz ]]; then
-            scp -P "$PORT" "${VPS_USER}@${VPS_HOST}:${REMOTE}" "backups/${DATE}.tar.gz"
-            echo "Backup baixado com sucesso:"
-            ls -lh "backups/${DATE}.tar.gz"
+            # SCP retry logic: max 3 attempts with 5-second delay
+            MAX_ATTEMPTS=3
+            RETRY_DELAY=5
+            ATTEMPT=1
+            SCP_SUCCESS=0
+            
+            while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
+              echo "Tentativa $ATTEMPT de $MAX_ATTEMPTS: baixando backup via SCP..."
+              
+              # Capture SCP output and error
+              SCP_OUTPUT=$(scp -P "$PORT" "${VPS_USER}@${VPS_HOST}:${REMOTE}" "backups/${DATE}.tar.gz" 2>&1)
+              SCP_EXIT_CODE=$?
+              
+              if [ $SCP_EXIT_CODE -eq 0 ]; then
+                echo "Backup baixado com sucesso:"
+                ls -lh "backups/${DATE}.tar.gz"
+                SCP_SUCCESS=1
+                break
+              else
+                # Analyze error type
+                ERROR_TYPE="desconhecido"
+                if echo "$SCP_OUTPUT" | grep -qi "timeout\|timed out\|connection timed out"; then
+                  ERROR_TYPE="timeout de rede"
+                elif echo "$SCP_OUTPUT" | grep -qi "permission denied\|insufficient permissions"; then
+                  ERROR_TYPE="permissões insuficientes"
+                elif echo "$SCP_OUTPUT" | grep -qi "no space left\|disk full\|quota exceeded"; then
+                  ERROR_TYPE="espaço em disco insuficiente"
+                fi
+                
+                echo "ERRO na tentativa $ATTEMPT: SCP falhou com código $SCP_EXIT_CODE"
+                echo "Tipo de erro detectado: $ERROR_TYPE"
+                echo "Detalhes: $SCP_OUTPUT"
+                
+                if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
+                  echo "Aguardando $RETRY_DELAY segundos antes da próxima tentativa..."
+                  sleep $RETRY_DELAY
+                fi
+              fi
+              
+              ATTEMPT=$((ATTEMPT + 1))
+            done
+            
+            if [ $SCP_SUCCESS -eq 0 ]; then
+              echo "ERRO: Falha ao baixar backup após $MAX_ATTEMPTS tentativas"
+              echo "Causa específica da falha: $ERROR_TYPE"
+              echo "Detalhes do último erro: $SCP_OUTPUT"
+              exit 1
+            fi
           else
             echo "ERRO: Tarball não encontrado ou caminho inválido: '$REMOTE'"
             exit 1
@@ -64,4 +121,27 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add backups/
           git diff --staged --quiet || git commit -m "backup: $(date -u +%F)"
+          
+          # Pull with rebase to sync branch before pushing
+          echo "Sincronizando branch com git pull --rebase..."
+          if ! git pull --rebase origin main 2>&1; then
+            # Check if there are conflicts after rebase
+            if git status | grep -q "rebase in progress\|You have unmerged paths\|Unmerged paths"; then
+              echo "ERRO: Conflitos detectados após git pull --rebase"
+              echo "Intervenção manual necessária para resolver conflitos"
+              echo "Execute os seguintes comandos localmente:"
+              echo "  1. git pull --rebase origin main"
+              echo "  2. Resolva os conflitos manualmente"
+              echo "  3. git rebase --continue"
+              echo "  4. git push"
+              git rebase --abort 2>/dev/null || true
+              exit 1
+            else
+              echo "ERRO: Falha ao executar git pull --rebase"
+              echo "Verifique problemas de autenticação ou conectividade"
+              exit 1
+            fi
+          fi
+          
+          echo "Branch sincronizado com sucesso, executando git push..."
           git push

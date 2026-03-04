@@ -7,3 +7,7 @@ id_*
 
 # Config local (se copiar config.example para config)
 config
+
+# Testes e specs (desenvolvimento)
+tests/
+.kiro/
