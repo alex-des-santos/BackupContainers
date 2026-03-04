@@ -1,12 +1,12 @@
 # Backup diário de configurações Docker da VPS para este repositório.
 # Requer: script instalado na VPS em /usr/local/bin/backup-docker-configs.sh
-# e secrets VPS_HOST, VPS_USER, VPS_SSH_KEY (e opcionalmente VPS_SSH_PORT).
+# e secrets VPS_HOST, VPS_USER, VPS_SSH_KEY, VPS_KNOWN_HOSTS.
 name: daily-vps-config-backup
 
 on:
   workflow_dispatch:
   schedule:
-    # UTC. Ex.: 06:15 UTC = 03:15 BRT (Brasil). Ajuste conforme seu fuso.
+    # UTC. 06:15 UTC = 03:15 BRT (Brasil, UTC-3). Ajuste conforme seu fuso.
     - cron: "15 6 * * *"
 
 jobs:
@@ -17,27 +17,18 @@ jobs:
       - name: Checkout repositório
         uses: actions/checkout@v4
 
-      # SSH e rsync necessários para conectar à VPS e baixar o arquivo
-      - name: Instalar ferramentas (SSH e rsync)
-        run: sudo apt-get update && sudo apt-get install -y openssh-client rsync
-
-      # Monta a chave privada a partir do secret para autenticação SSH
-      - name: Configurar chave SSH
+      # Monta a chave privada e o known_hosts a partir dos secrets
+      - name: Configurar SSH
         env:
           VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
         run: |
           mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
           echo "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-
-      # Evita prompt de confirmação do host na primeira conexão
-      - name: Adicionar VPS ao known_hosts
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
-        run: |
-          PORT="${VPS_SSH_PORT:-22}"
-          ssh-keyscan -p "$PORT" -H "$VPS_HOST" >> ~/.ssh/known_hosts
+          echo "$VPS_KNOWN_HOSTS" >> ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
 
       # Roda o script na VPS (gera o tarball) e baixa o arquivo para backups/
       - name: Executar backup na VPS e baixar tarball
@@ -50,9 +41,20 @@ jobs:
           DATE="$(date -u +%F)"
           mkdir -p backups
 
-          REMOTE=$(ssh -o StrictHostKeyChecking=no -p "$PORT" "${VPS_USER}@${VPS_HOST}" "sudo /usr/local/bin/backup-docker-configs.sh" 2>/dev/null | tail -1)
+          echo "Conectando à VPS ${VPS_HOST}:${PORT}..."
+          REMOTE=$(ssh -p "$PORT" "${VPS_USER}@${VPS_HOST}" \
+            "sudo BACKUP_OUTPUT_DIR=/var/backups/docker-configs BACKUP_EXCLUDE_ENV=1 /usr/local/bin/backup-docker-configs.sh" \
+            2>&1 | tail -1)
+
+          echo "Tarball remoto: $REMOTE"
+
           if [[ -n "$REMOTE" && "$REMOTE" == *.tar.gz ]]; then
-            scp -o StrictHostKeyChecking=no -P "$PORT" "${VPS_USER}@${VPS_HOST}:${REMOTE}" "backups/${DATE}.tar.gz"
+            scp -P "$PORT" "${VPS_USER}@${VPS_HOST}:${REMOTE}" "backups/${DATE}.tar.gz"
+            echo "Backup baixado com sucesso:"
+            ls -lh "backups/${DATE}.tar.gz"
+          else
+            echo "ERRO: Tarball não encontrado ou caminho inválido: '$REMOTE'"
+            exit 1
           fi
 
       # Persiste o backup no repositório (commit + push)
