@@ -12,6 +12,8 @@ on:
 jobs:
   backup:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       # Checkout para poder fazer commit do tarball em backups/
       - name: Checkout repositório
